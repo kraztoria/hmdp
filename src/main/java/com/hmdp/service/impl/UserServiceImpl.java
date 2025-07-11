@@ -6,6 +6,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
+import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
@@ -90,8 +91,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
 
         // 将用户信息保存到 session 中 并删除验证码信息
+        UserDTO userDTO = new UserDTO();
+        userDTO.setId(user.getId());
+        userDTO.setNickName(user.getNickName());
+        userDTO.setIcon(user.getIcon());
+
         session.removeAttribute("code");
-        session.setAttribute("user", user);
+        session.setAttribute("user", userDTO);
         log.info("[login] {} 用户登录成功", phone);
         return Result.ok();
     }
