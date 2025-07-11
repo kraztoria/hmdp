@@ -1,10 +1,19 @@
 package com.hmdp.service.impl;
 
+import com.alibaba.fastjson.JSON;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.dto.Result;
 import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
-import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.hmdp.utils.RedisConstants;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+
+import java.util.concurrent.TimeUnit;
 
 /**
  * <p>
@@ -14,7 +23,67 @@ import org.springframework.stereotype.Service;
  * @author 虎哥
  * @since 2021-12-22
  */
+@Slf4j
 @Service
+@RequiredArgsConstructor
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
+    private final StringRedisTemplate redisTemplate;
+
+    private final ShopMapper shopMapper;
+
+    @Override
+    public Result queryShopById(Long id) {
+        // 构建缓存 key
+        String cacheKey = RedisConstants.CACHE_SHOP_KEY + id;
+
+        // 从 redis 中查询缓存
+        String shopMessage = redisTemplate.opsForValue().get(cacheKey);
+        Shop shop;
+
+        if (StringUtils.isEmpty(shopMessage)) {
+            // 缓存中没有对应店铺数据，查询数据库并加载缓存
+            log.info("[queryShopById] 缓存中没有店铺数据 {}，查询数据库并加载缓存", id);
+            shop = loadCache(id, cacheKey);
+            if (null == shop) return Result.fail("店铺不存在");
+        } else {
+            // 缓存命中
+            log.info("[queryShopById] 店铺 {} 缓存命中 {}", id, shopMessage);
+            shop = JSON.parseObject(shopMessage, Shop.class);
+
+            // 更新缓存时间
+            redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        }
+        return Result.ok(shop);
+    }
+
+    /**
+     * 从数据库中查询店铺信息并加载进缓存中
+     *
+     * @param id       店铺id
+     * @param cacheKey 缓存 key
+     * @return 店铺数据 如果店铺不存在则返回 null
+     */
+    private Shop loadCache(Long id, String cacheKey) {
+        log.info("[loadCache] 从数据库中查询店铺 {}", id);
+        // 从数据库中查询对应数据
+        Shop shop = shopMapper.selectById(id);
+
+        // 不存在对应的店铺
+        if (null == shop) {
+            log.warn("[loadCache] 店铺 {} 不存在", id);
+            return null;
+        }
+
+        // 序列化店铺数据
+        String shopMessage = JSON.toJSONString(shop);
+
+        // 将数据加载进缓存中
+        redisTemplate.opsForValue().set(cacheKey, shopMessage, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
+
+        log.info("[loadCache] 成功将店铺 {} 信息加载进缓存中 {}", id, shopMessage);
+
+        // 返回店铺数据
+        return shop;
+    }
 }
