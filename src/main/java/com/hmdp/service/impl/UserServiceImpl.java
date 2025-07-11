@@ -1,21 +1,26 @@
 package com.hmdp.service.impl;
 
+import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.PhoneUtil;
 import cn.hutool.core.util.RandomUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.hmdp.dto.LoginFormDTO;
 import com.hmdp.dto.Result;
-import com.hmdp.dto.UserDTO;
 import com.hmdp.entity.User;
 import com.hmdp.mapper.UserMapper;
 import com.hmdp.service.IUserService;
+import com.hmdp.utils.RedisConstants;
 import com.hmdp.utils.RegexUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import javax.servlet.http.HttpSession;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * <p>
@@ -31,6 +36,8 @@ import javax.servlet.http.HttpSession;
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IUserService {
 
     private final UserMapper userMapper;
+
+    private final StringRedisTemplate redisTemplate;
 
     @Override
     public Result sendCode(String phone, HttpSession session) {
@@ -48,8 +55,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             throw new RuntimeException("验证码格式错误");
         }
 
-        // 3. 保存验证码到 session 中
-        session.setAttribute("code", code);
+        // 3. 保存验证码到 redis 中并设定有效时间
+        redisTemplate.opsForValue().set(RedisConstants.LOGIN_CODE_KEY + phone, code, RedisConstants.LOGIN_CODE_TTL, TimeUnit.MINUTES);
 
         // 4. 发送短信验证码
         log.info("[sendCode] 给 {} 发送验证码成功 {}", phone, code);
@@ -69,11 +76,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
         }
 
         // 校验验证码
-        String cachedCode = (String) session.getAttribute("code");
+        String cachedCode = redisTemplate.opsForValue().get(RedisConstants.LOGIN_CODE_KEY + phone);
         if (null == cachedCode || !cachedCode.equals(code)) {
             log.warn("[login] {} 用户输入的验证码错误 输入验证码: {} 期望验证码: {}", phone, code, cachedCode);
             return Result.fail("验证码错误");
         }
+        // 删除验证码
+        redisTemplate.delete(RedisConstants.LOGIN_CODE_KEY + phone);
 
         // 根据手机号查询用户
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getPhone, phone));
@@ -90,15 +99,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements IU
             userMapper.insert(user);
         }
 
-        // 将用户信息保存到 session 中 并删除验证码信息
-        UserDTO userDTO = new UserDTO();
-        userDTO.setId(user.getId());
-        userDTO.setNickName(user.getNickName());
-        userDTO.setIcon(user.getIcon());
+        // 生成 token
+        String token = IdUtil.fastSimpleUUID();
 
-        session.removeAttribute("code");
-        session.setAttribute("user", userDTO);
+        // 将用户信息保存到 redis 中
+        Map<String, String> userMap = new HashMap<>();
+        userMap.put("id", user.getId().toString());
+        userMap.put("nickName", user.getNickName());
+        userMap.put("icon", user.getIcon());
+        redisTemplate.opsForHash().putAll(RedisConstants.LOGIN_USER_KEY + token, userMap);
+        redisTemplate.expire(RedisConstants.LOGIN_USER_KEY + token, RedisConstants.LOGIN_USER_TTL, TimeUnit.SECONDS);
+
         log.info("[login] {} 用户登录成功", phone);
-        return Result.ok();
+        return Result.ok(token);
     }
 }
