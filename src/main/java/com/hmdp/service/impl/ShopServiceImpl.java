@@ -36,7 +36,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
 
     @Override
     public Result queryShopById(Long id) {
-        return queryWithMutex(id);
+        return queryWithPassThrough(id);
     }
 
     // 缓存击穿 互斥锁版
@@ -109,8 +109,6 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             log.info("[queryShopById] 店铺 {} 缓存命中 {}", id, shopMessage);
             shop = JSON.parseObject(shopMessage, Shop.class);
 
-            // 更新缓存时间
-            // redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
         }
         return Result.ok(shop);
     }
@@ -145,29 +143,68 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
     private Shop loadCache(Long id, String cacheKey) {
         log.info("[loadCache] 从数据库中将店铺 {} 加载进缓存", id);
 
-        // 从数据库中查询对应数据
-        Shop shop = shopMapper.selectById(id);
-
-        // 不存在对应的店铺
-        if (null == shop) {
-            log.warn("[loadCache] 店铺 {} 不存在", id);
-
-            // 将空数据写入缓存中 避免缓存穿透
-            redisTemplate.opsForValue().set(cacheKey, SystemConstants.EMPTY_STRING, RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
-
-            return null;
+        // 先检查缓存是否已经存在
+        String shopJson = redisTemplate.opsForValue().get(cacheKey);
+        if (!StringUtils.isEmpty(shopJson)) {
+            log.info("[loadCache] 缓存已被其他线程重建，直接返回");
+            return JSON.parseObject(shopJson, Shop.class);
         }
 
-        // 序列化店铺数据
-        String shopMessage = JSON.toJSONString(shop);
+        String lockKey = RedisConstants.LOCK_SHOP_KEY + id;
+        boolean locked = tryLock(lockKey);
+        log.info("[loadCache] 尝试获取店铺 {} 分布式锁 {}", id, lockKey);
 
-        // 将数据加载进缓存中
-        redisTemplate.opsForValue().set(cacheKey, shopMessage, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
+        // 获取分布式锁
+        try {
+            if (!locked) {
+                // 没有获取到锁就睡眠并重试
+                log.info("[loadCache] 没有获取到店铺 {} 分布式锁 {}，睡眠并重试", id, lockKey);
+                TimeUnit.MILLISECONDS.sleep(50);
+                return loadCache(id, cacheKey);
+            }
 
-        log.info("[loadCache] 成功将店铺 {} 信息加载进缓存中 {}", id, shopMessage);
+            log.info("[loadCache] 成功获取店铺 {} 分布式锁 {}, 开始查询数据库", id, lockKey);
 
-        // 返回店铺数据
-        return shop;
+            // 获取锁后再次检查缓存是否已存在
+            shopJson = redisTemplate.opsForValue().get(cacheKey);
+            if (!StringUtils.isEmpty(shopJson)) {
+                log.info("[loadCache] 获取锁 {} 后发现缓存已被其他线程重建，直接返回", lockKey);
+                return JSON.parseObject(shopJson, Shop.class);
+            }
+
+            TimeUnit.SECONDS.sleep(2);
+            // 从数据库中查询对应数据
+            Shop shop = shopMapper.selectById(id);
+
+            // 不存在对应的店铺
+            if (null == shop) {
+                log.warn("[loadCache] 店铺 {} 不存在", id);
+
+                // 将空数据写入缓存中 避免缓存穿透
+                redisTemplate.opsForValue().set(cacheKey, SystemConstants.EMPTY_STRING, RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
+
+                return null;
+            }
+
+            // 序列化店铺数据
+            String shopMessage = JSON.toJSONString(shop);
+
+            // 将数据加载进缓存中
+            redisTemplate.opsForValue().set(cacheKey, shopMessage, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
+
+            log.info("[loadCache] 成功将店铺 {} 信息加载进缓存中 {}", id, shopMessage);
+
+            // 返回店铺数据
+            return shop;
+
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+
+        } finally {
+            // 释放分布式锁
+            unlock(lockKey);
+            log.info("[loadCache] 成功释放店铺 {} 分布式锁", id);
+        }
     }
 
     private boolean tryLock(String lockKey) {
