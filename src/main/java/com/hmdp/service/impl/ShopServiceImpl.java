@@ -52,7 +52,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             shop = JSON.parseObject(shopMessage, Shop.class);
 
             // 更新缓存时间
-            redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
+            // redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
         }
         return Result.ok(shop);
     }

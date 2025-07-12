@@ -53,7 +53,7 @@ public class ShopTypeServiceImpl extends ServiceImpl<ShopTypeMapper, ShopType> i
             shopTypes = JSON.parseArray(shopTypesJson, ShopType.class);
 
             // 更新缓存时间
-            redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TYPE_TTL, TimeUnit.MINUTES);
+            // redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TYPE_TTL, TimeUnit.MINUTES);
         }
 
         return Result.ok(shopTypes);
