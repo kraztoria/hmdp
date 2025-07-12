@@ -7,6 +7,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.RedisConstants;
+import com.hmdp.utils.SystemConstants;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -43,6 +44,13 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         Shop shop;
 
         if (StringUtils.isEmpty(shopMessage)) {
+            // 判断是空缓存还是没有缓存
+            if (shopMessage != null) {
+                // 空缓存
+                log.warn("[queryShopById] 命中空缓存 店铺id: {}", id);
+                return Result.fail("店铺不存在");
+            }
+
             // 缓存中没有对应店铺数据，查询数据库并加载缓存
             log.info("[queryShopById] 缓存中没有店铺数据 {}，查询数据库并加载缓存", id);
             shop = loadCache(id, cacheKey);
@@ -93,6 +101,10 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
         // 不存在对应的店铺
         if (null == shop) {
             log.warn("[loadCache] 店铺 {} 不存在", id);
+
+            // 将空数据写入缓存中 避免缓存穿透
+            redisTemplate.opsForValue().set(cacheKey, SystemConstants.EMPTY_STRING, RedisConstants.CACHE_NULL_TTL, TimeUnit.MINUTES);
+
             return null;
         }
 

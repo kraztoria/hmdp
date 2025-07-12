@@ -16,7 +16,7 @@ import javax.annotation.Resource;
 import java.util.List;
 
 /**
- * 前端控制器
+ * 博文控制器
  *
  * @author 虎哥
  * @since 2021-12-22
