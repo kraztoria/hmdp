@@ -28,4 +28,4 @@ mybatis-plus:
     banner: false
 logging:
   level:
-    com.hmdp: info
+    com.hmdp: debug
