@@ -7,6 +7,7 @@ import com.hmdp.entity.Shop;
 import com.hmdp.mapper.ShopMapper;
 import com.hmdp.service.IShopService;
 import com.hmdp.utils.RedisConstants;
+import com.hmdp.utils.RedisData;
 import com.hmdp.utils.SystemConstants;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDateTime;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -30,13 +33,75 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
+    private final ThreadPoolExecutor threadPoolExecutor;
+
     private final StringRedisTemplate redisTemplate;
 
     private final ShopMapper shopMapper;
 
     @Override
     public Result queryShopById(Long id) {
-        return queryWithPassThrough(id);
+        return queryWithLogicExpire(id);
+    }
+
+    // 缓存击穿 逻辑过期版
+    private Result queryWithLogicExpire(Long id) {
+        // 构建缓存 key
+        String cacheKey = RedisConstants.CACHE_SHOP_KEY + id;
+
+        // 查询缓存并反序列化
+        String redisDataJson = redisTemplate.opsForValue().get(cacheKey);
+
+        if (null == redisDataJson) {
+            log.error("[queryWithLogicExpire] 缓存中没有店铺数据 {}", id);
+            return Result.fail("店铺不存在");
+        }
+
+        RedisData redisData = JSON.parseObject(redisDataJson, RedisData.class);
+
+        // 判断缓存是否过期
+        if (LocalDateTime.now().isAfter(redisData.getExpireTime())) {
+            // 过期了 进行缓存重建
+
+            // 1. 获取分布式锁
+            String lockKey = RedisConstants.LOCK_SHOP_KEY + id;
+            boolean locked = tryLock(lockKey);
+
+            // 2. 获取锁失败 说明已经在重建缓存了 返回旧数据
+            if (!locked) return Result.ok(redisData.getData());
+
+            // 3. 获取锁成功 重建缓存
+
+            // todo 再次检查缓存是否过期 如果没有过期则直接返回
+
+            // 开启独立线程重建缓存
+            threadPoolExecutor.execute(() -> {
+                // 从数据库中查询数据
+                Shop shop = shopMapper.selectById(id);
+
+                if (null == shop) {
+                    log.error("[queryWithLogicExpire] 重建缓存时店铺 {} 不存在", id);
+                    throw new RuntimeException("店铺 " + id + " 在数据库中不存在");
+                }
+
+                // 构建数据
+                RedisData data = new RedisData();
+                data.setData(shop);
+                data.setExpireTime(LocalDateTime.now().plusMinutes(RedisConstants.CACHE_SHOP_TTL));
+
+                // 序列化数据
+                String jsonString = JSON.toJSONString(data);
+
+                // 写入(更新)缓存
+                redisTemplate.opsForValue().set(cacheKey, jsonString);
+
+                // 释放分布式锁
+                unlock(lockKey);
+            });
+        }
+
+        // 没有过期 直接返回数据
+        return Result.ok(redisData.getData());
     }
 
     // 缓存击穿 互斥锁版
@@ -172,7 +237,7 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
                 return JSON.parseObject(shopJson, Shop.class);
             }
 
-            TimeUnit.SECONDS.sleep(2);
+            // TimeUnit.SECONDS.sleep(2);
             // 从数据库中查询对应数据
             Shop shop = shopMapper.selectById(id);
 

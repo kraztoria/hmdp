@@ -29,3 +29,10 @@ mybatis-plus:
 logging:
   level:
     com.hmdp: debug
+
+hmdp:
+  thread-pool:
+    core-pool-size: 8
+    max-pool-size: 16
+    queue-capacity: 32
+    keep-alive-seconds: 60
