@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.util.concurrent.TimeUnit;
@@ -55,6 +56,26 @@ public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IS
             // redisTemplate.expire(cacheKey, RedisConstants.CACHE_SHOP_TTL, TimeUnit.MINUTES);
         }
         return Result.ok(shop);
+    }
+
+    @Override
+    @Transactional
+    public Result updateShop(Shop shop) {
+        Long id = shop.getId();
+        if (id == null) {
+            log.warn("[updateShop] 店铺id不能为空");
+            return Result.fail("店铺id不能为空");
+        }
+
+        // 更新数据库信息
+        shopMapper.updateById(shop);
+
+        // 删除缓存
+        redisTemplate.delete(RedisConstants.CACHE_SHOP_KEY + id);
+
+        log.info("[updateShop] 成功更新店铺 {} 信息并删除缓存", id);
+
+        return Result.ok();
     }
 
     /**
